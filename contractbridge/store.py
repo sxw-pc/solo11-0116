@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS allocation(id INTEGER PRIMARY KEY,consumer TEXT NOT N
 CREATE TABLE IF NOT EXISTS delivery(id INTEGER PRIMARY KEY,consumer TEXT NOT NULL,contract_hash TEXT NOT NULL,status TEXT NOT NULL,created TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(consumer,contract_hash));
 CREATE TABLE IF NOT EXISTS delivery_item(delivery_id INT REFERENCES delivery(id),output_id INT REFERENCES output(id),hash TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(delivery_id,output_id));
 CREATE TABLE IF NOT EXISTS delivery_ack(id INTEGER PRIMARY KEY,delivery_id INT REFERENCES delivery(id),output_id INT REFERENCES output(id),hash TEXT NOT NULL,result TEXT NOT NULL,UNIQUE(delivery_id,output_id));
+CREATE TABLE IF NOT EXISTS migration_plan(id TEXT PRIMARY KEY,baseline_hash TEXT NOT NULL REFERENCES contract(hash),target_hash TEXT NOT NULL REFERENCES contract(hash),max_amount_delta REAL NOT NULL,status TEXT NOT NULL,reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS migration_diff(plan_id TEXT NOT NULL REFERENCES migration_plan(id),envelope_id INT NOT NULL REFERENCES envelope(id),baseline_output INT REFERENCES output(id),target_output INT REFERENCES output(id),amount_delta REAL,status TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(plan_id,envelope_id));
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True);db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);return db

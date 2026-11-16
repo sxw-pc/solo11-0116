@@ -7,3 +7,5 @@
 `python -m contractbridge demo` 生成本地虚构封套及 JSON/Markdown 报告。测试覆盖契约冲突、版本歧义、枚举和单位换算、默认值证据、未知错误、身份冲突、重放、跨包状态矛盾和坏行隔离。项目限定两版，不接在线 API，也不做 SQL 模式迁移。
 
 消费者配额子系统用 `consumer_policy` 与 `allocation` 固化额度和逐条决定；交付子系统用 `delivery`、`delivery_item`、`delivery_ack` 保存快照与回执。配额读取真实转译和独立验真结果；交付读取配额，分别生成待回执、暂缓、部分失败和已交付结论。
+
+双契约迁移用 `migration_plan` 冻结源/目标契约及允许漂移，`migration_diff` 按原始封套保存两侧输出、金额差与语义结论。比较会分别重验两侧转译；消费者交付重新计算迁移结论，未通过切换评估时暂缓。

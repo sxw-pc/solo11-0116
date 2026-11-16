@@ -172,7 +172,8 @@ def reconcile(db_path):
     db.close();return issues
 def verify(db_path,contract_hash):
     db=connect(db_path);contract=json.loads(db.execute('SELECT body FROM contract WHERE hash=?',(contract_hash,)).fetchone()['body']);results=[]
-    for row in db.execute('SELECT * FROM output'):
+    for row in db.execute('''SELECT o.* FROM output o JOIN run r ON r.id=o.run_id
+        JOIN contract c ON c.id=r.contract_id WHERE c.hash=?''',(contract_hash,)):
         obj=json.loads(row['body']);codes=[]
         if sha(row['body'].encode())!=row['hash']:codes.append('output_hash')
         if any(x not in obj for x in contract['required']):codes.append('required_missing')

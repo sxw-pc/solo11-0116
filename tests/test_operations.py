@@ -1,6 +1,6 @@
 import json
 import pytest
-from contractbridge import engine, operations
+from contractbridge import engine, operations, migration
 from contractbridge.store import connect
 
 
@@ -61,3 +61,43 @@ def test_tampered_translation_cannot_be_allocated(tmp_path):
     allocation = operations.allocate(db, 'c')
     assert allocation['items'][0]['reason'] == 'output_unverified'
     assert operations.dispatch(db, 'c')['status'] == '暂缓'
+
+
+def target_contract(db, factor):
+    contract = {'versions': [{'version': 'v1', 'signature': ['/legacy']},
+                             {'version': 'v3', 'signature': ['/new']}],
+                'required': ['id', 'amount'],
+                'rules': [{'target': 'id', 'source': '/entity_id'},
+                          {'target': 'amount', 'source': '/legacy/value',
+                           'op': 'scale', 'factor': factor}],
+                'errors': {}}
+    digest = engine.freeze(db, contract)
+    engine.translate(db, digest)
+    return digest
+
+
+def test_dual_contract_drift_blocks_consumer_dispatch(tmp_path):
+    db, baseline = setup_case(tmp_path, [2, 3])
+    target = target_contract(db, 110)
+    migration.plan(db, 'cutover', baseline, target, 10)
+    compared = migration.compare(db, 'cutover')
+    assert compared['status'] == '阻断'
+    assert [d['reason'] for d in compared['diffs']] == ['amount_drift', 'amount_drift']
+    operations.policy(db, 'new-consumer', target, 1000)
+    assert [x['status'] for x in operations.allocate(db, 'new-consumer')['items']] == ['已配额', '已配额']
+    assert operations.dispatch(db, 'new-consumer')['status'] == '暂缓'
+    assert connect(db).execute('SELECT count(*) FROM migration_diff WHERE plan_id=?', ('cutover',)).fetchone()[0] == 2
+    with pytest.raises(ValueError, match='migration_identity_conflict'):
+        migration.plan(db, 'cutover', baseline, target, 50)
+
+
+def test_compatible_cutover_and_tampered_target_hold(tmp_path):
+    db, baseline = setup_case(tmp_path, [1])
+    target = target_contract(db, 110)
+    migration.plan(db, 'cutover', baseline, target, 20)
+    assert migration.compare(db, 'cutover')['status'] == '可切换'
+    operations.policy(db, 'new-consumer', target, 1000)
+    assert operations.dispatch(db, 'new-consumer')['status'] == '待回执'
+    with connect(db) as conn:
+        conn.execute('UPDATE output SET body=? WHERE id=(SELECT max(id) FROM output)', ('{}',))
+    assert migration.compare(db, 'cutover')['status'] == '待核'

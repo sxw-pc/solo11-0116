@@ -64,6 +64,17 @@ def allocate(db_path, consumer):
 
 
 def dispatch(db_path, consumer):
+    from . import migration
+    check = connect(db_path)
+    try:
+        consumer_policy = check.execute('SELECT * FROM consumer_policy WHERE consumer=?', (consumer,)).fetchone()
+        if not consumer_policy:
+            raise ValueError('unknown_consumer')
+        plans = [x['id'] for x in check.execute('SELECT id FROM migration_plan WHERE target_hash=?',
+                                                (consumer_policy['contract_hash'],))]
+    finally:
+        check.close()
+    migration_statuses = [migration.compare(db_path, plan_id)['status'] for plan_id in plans]
     allocation = allocate(db_path, consumer)
     db = connect(db_path)
     try:
@@ -72,7 +83,8 @@ def dispatch(db_path, consumer):
                          (consumer, pol['contract_hash'])).fetchone()
         if old:
             return delivery_status(db_path, old['id'])
-        if not allocation['items'] or any(x['status'] != '已配额' for x in allocation['items']):
+        if (not allocation['items'] or any(x['status'] != '已配额' for x in allocation['items']) or
+                any(x != '可切换' for x in migration_statuses)):
             status = '暂缓'
         else:
             status = '待回执'

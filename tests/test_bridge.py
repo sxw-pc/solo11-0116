@@ -106,3 +106,65 @@ def test_verify_detects_output_tamper(tmp_path):
     conn=connect(db)
     with conn:conn.execute("UPDATE output SET body='{}'")
     assert engine.verify(db,h)[0]['status']=='拒绝'
+
+
+def test_verify_replays_business_value_even_if_hash_is_rewritten(tmp_path):
+    c=cfg();db=tmp_path/'db';h=engine.freeze(db,c)
+    p=tmp_path/'x.jsonl'
+    p.write_text(json.dumps({'version':'v1','entity_id':'A','subject':'Test','legacy':{'value':2}}))
+    engine.ingest(db,p,c);engine.translate(db,h)
+    from contractbridge.store import connect
+    conn=connect(db)
+    altered=engine.canonical({'id':'A','amount':300.0,'status':'ok'})
+    with conn:
+        conn.execute('UPDATE output SET body=?,hash=?',(altered,engine.sha(altered.encode())))
+    verdict=engine.verify(db,h)[0]
+    assert verdict['status']=='拒绝'
+    assert 'business_mismatch' in verdict['issues']
+
+def test_verify_rejects_forged_field_provenance(tmp_path):
+    c=cfg();db=tmp_path/'db';h=engine.freeze(db,c)
+    p=tmp_path/'x.jsonl'
+    p.write_text(json.dumps({'version':'v1','entity_id':'A','subject':'Test','legacy':{'value':2}}))
+    engine.ingest(db,p,c);engine.translate(db,h)
+    from contractbridge.store import connect
+    conn=connect(db)
+    with conn:conn.execute("UPDATE evidence SET pointer='/legacy/other' WHERE field='amount'")
+    assert 'evidence_mismatch' in engine.verify(db,h)[0]['issues']
+
+
+def test_timezone_normalization_changes_cross_package_state_verdict(tmp_path):
+    c=cfg();db=tmp_path/'db';h=engine.freeze(db,c)
+    rows=[{'version':'v1','entity_id':'A','subject':'Same','legacy':{'value':1},
+           'state':'closed','event_time':'2026-01-01T10:00:00+08:00'},
+          {'version':'v1','entity_id':'A','subject':'Same','legacy':{'value':2},
+           'state':'active','event_time':'2026-01-01T03:00:00+00:00'}]
+    for i,row in enumerate(rows):
+        p=tmp_path/f'{i}.jsonl';p.write_text(json.dumps(row));engine.ingest(db,p,c)
+    engine.translate(db,h)
+    from contractbridge.store import connect
+    conn=connect(db)
+    assert conn.execute("SELECT count(*) FROM issue WHERE code='state_transition'").fetchone()[0]==1
+
+
+def test_mapping_dependency_order_and_cycle(tmp_path):
+    c=cfg()
+    c['rules'].insert(0,{'target':'amount_copy','source':'$amount','op':'chain'})
+    out,provenance,issues=engine.transform({'entity_id':'A','legacy':{'value':2}},c)
+    assert not issues and out['amount_copy']==200
+    assert ('amount_copy','$amount','chain') in provenance
+    c['rules'].append({'target':'amount','source':'$amount_copy','op':'chain'})
+    with pytest.raises(ValueError,match='target_conflict'):engine.freeze(tmp_path/'db',c)
+    c['rules']=[{'target':'a','source':'$b','op':'chain'},
+                {'target':'b','source':'$a','op':'chain'}]
+    c['required']=['a']
+    with pytest.raises(ValueError,match='mapping_cycle'):engine.freeze(tmp_path/'db2',c)
+
+
+def test_frozen_version_cannot_silently_change_semantics(tmp_path):
+    c=cfg();db=tmp_path/'db';first=engine.freeze(db,c)
+    changed=cfg();changed['rules'][1]['factor']=1000
+    with pytest.raises(ValueError,match='contract_version_conflict'):
+        engine.freeze(db,changed)
+    from contractbridge.store import connect
+    assert connect(db).execute('SELECT hash FROM contract').fetchone()[0]==first

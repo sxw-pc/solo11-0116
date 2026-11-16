@@ -1,8 +1,29 @@
 import hashlib,json
+from datetime import datetime,timezone
 from pathlib import Path
 from .store import connect
 def sha(x):return hashlib.sha256(x).hexdigest()
+def event_instant(value):
+    parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
+    if parsed.tzinfo is None:parsed=parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 def canonical(x):return json.dumps(x,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+def ordered_rules(contract):
+    by_target={rule['target']:rule for rule in contract['rules']}
+    if len(by_target)!=len(contract['rules']):raise ValueError('target_conflict')
+    ordered=[];active=set();done=set()
+    def visit(target):
+        if target in active:raise ValueError('mapping_cycle')
+        if target in done:return
+        active.add(target);rule=by_target[target]
+        if rule.get('op')=='chain':
+            source=rule.get('source','')
+            if not source.startswith('$') or source[1:] not in by_target:raise ValueError('unknown_chain_source')
+            visit(source[1:])
+        active.remove(target);done.add(target);ordered.append(rule)
+    for target in by_target:visit(target)
+    return ordered
+
 def pointer(obj,path):
     cur=obj
     for part in path.strip('/').split('/'):
@@ -12,15 +33,16 @@ def pointer(obj,path):
 def freeze(db_path,contract):
     versions={x['version'] for x in contract['versions']}
     if len(versions)!=2 or len(contract['versions'])!=2:raise ValueError('two_versions_required')
-    targets=set();sources=set()
-    for rule in contract['rules']:
-        if rule['target'] in targets:raise ValueError('target_conflict')
-        if rule.get('source')==rule['target'] and rule.get('op')=='chain':raise ValueError('mapping_cycle')
-        targets.add(rule['target']);sources.add(rule.get('source'))
+    ordered_rules(contract)
+    targets={rule['target'] for rule in contract['rules']}
     required=set(contract['required'])
     if not required.issubset(targets):raise ValueError('required_unmapped')
     body=canonical(contract);h=sha(body.encode());db=connect(db_path)
-    with db:db.execute('INSERT OR IGNORE INTO contract(version,hash,body) VALUES (?,?,?)',(contract['versions'][-1]['version'],h,body))
+    target_version=contract['versions'][-1]['version']
+    with db:
+        existing=db.execute('SELECT hash FROM contract WHERE version=?',(target_version,)).fetchone()
+        if existing and existing['hash']!=h:raise ValueError('contract_version_conflict')
+        db.execute('INSERT OR IGNORE INTO contract(version,hash,body) VALUES (?,?,?)',(target_version,h,body))
     db.close();return h
 def identify(obj,contract):
     version=obj.get('version')
@@ -58,8 +80,12 @@ def ingest(db_path,path,contract):
     db.close();return count
 def transform(obj,contract):
     out={};evidence=[];issues=[]
-    for rule in contract['rules']:
-        exists,value=pointer(obj,rule['source']);target=rule['target'];op=rule.get('op','copy')
+    for rule in ordered_rules(contract):
+        target=rule['target'];op=rule.get('op','copy')
+        if op=='chain':
+            source_target=rule['source'][1:]
+            exists=source_target in out;value=out.get(source_target)
+        else:exists,value=pointer(obj,rule['source'])
         if not exists:
             if 'default' in rule:
                 value=rule['default'];exists=True;evidence.append((target,None,'default'))
@@ -105,9 +131,9 @@ def translate(db_path,contract_hash):
                 event_time=obj.get('event_time')
                 if state is not None and event_time is not None:
                     previous=states.get(identity)
-                    if previous and event_time<previous[0]:
+                    if previous and event_instant(event_time)<previous[0]:
                         db.execute('INSERT INTO issue(envelope_id,run_id,code,detail) VALUES (?,?,?,?)',(e['id'],rid,'state_regression',identity));bad=True
-                    states[identity]=(event_time,state)
+                    states[identity]=(event_instant(event_time),state)
                 old=db.execute('SELECT subject FROM entity WHERE id=?',(identity,)).fetchone()
                 if old and old['subject']!=subject:
                     db.execute('INSERT INTO issue(envelope_id,run_id,code,detail) VALUES (?,?,?,?)',(e['id'],rid,'identity_conflict',identity));bad=True;continue
@@ -132,7 +158,7 @@ def reconcile(db_path):
             subjects={str(obj.get('subject','')) for _,obj in items}
             if len(subjects)>1:
                 for e,_ in items:issues.append((e['id'],'cross_package_identity',identity))
-            dated=sorted([(obj.get('event_time'),obj.get('state'),e['id']) for e,obj in items if obj.get('event_time') and obj.get('state')])
+            dated=sorted([(event_instant(obj['event_time']),obj['state'],e['id']) for e,obj in items if obj.get('event_time') and obj.get('state')])
             previous=None
             allowed={'new':{'new','active','closed'},'active':{'active','closed'},'closed':{'closed','reopened'},'reopened':{'reopened','active','closed'}}
             for time,state,eid in dated:
@@ -151,6 +177,15 @@ def verify(db_path,contract_hash):
         if sha(row['body'].encode())!=row['hash']:codes.append('output_hash')
         if any(x not in obj for x in contract['required']):codes.append('required_missing')
         if obj.get('status') not in set(contract.get('errors',{}).values())|{'ok'}:codes.append('status_invalid')
+        envelope=db.execute('SELECT raw,entity_id FROM envelope WHERE id=?',(row['envelope_id'],)).fetchone()
+        if envelope is None:codes.append('source_missing')
+        else:
+            source=json.loads(envelope['raw']);source['entity_id']=envelope['entity_id']
+            expected,expected_evidence,_=transform(source,contract)
+            if canonical(expected)!=row['body']:codes.append('business_mismatch')
+            actual_evidence={(x['field'],x['pointer'],x['rule']) for x in db.execute(
+                'SELECT field,pointer,rule FROM evidence WHERE output_id=?',(row['id'],))}
+            if actual_evidence!=set(expected_evidence):codes.append('evidence_mismatch')
         results.append({'id':row['id'],'status':'拒绝' if codes else row['status'],'issues':codes})
     db.close();return results
 def report(db_path,contract_hash,path):

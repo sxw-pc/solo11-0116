@@ -93,3 +93,16 @@ def test_unknown_enum_stays_unresolved():
     c=cfg();c['rules'].append({'target':'level','source':'/legacy/level','op':'enum','values':{'1':'low'}})
     out,_,issues=engine.transform({'entity_id':'A','legacy':{'value':1,'level':99}},c)
     assert 'level' not in out and ('enum_unknown','level') in issues
+
+def test_known_error_maps_without_success():
+    out,_,issues=engine.transform({'entity_id':'A','legacy':{'value':1},'status':'TEMP'},cfg())
+    assert out['status']=='retry' and not issues
+
+def test_verify_detects_output_tamper(tmp_path):
+    c=cfg();db=tmp_path/'db';h=engine.freeze(db,c)
+    p=tmp_path/'x.jsonl';p.write_text(json.dumps({'version':'v1','entity_id':'A','subject':'Test','legacy':{'value':2}}))
+    engine.ingest(db,p,c);engine.translate(db,h)
+    from contractbridge.store import connect
+    conn=connect(db)
+    with conn:conn.execute("UPDATE output SET body='{}'")
+    assert engine.verify(db,h)[0]['status']=='拒绝'

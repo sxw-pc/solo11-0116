@@ -11,6 +11,11 @@ CREATE TABLE IF NOT EXISTS run(id INTEGER PRIMARY KEY,source_id INT REFERENCES s
 CREATE TABLE IF NOT EXISTS output(id INTEGER PRIMARY KEY,run_id INT REFERENCES run(id),envelope_id INT REFERENCES envelope(id),body TEXT NOT NULL,hash TEXT NOT NULL,status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS evidence(output_id INT REFERENCES output(id),field TEXT NOT NULL,pointer TEXT,rule TEXT NOT NULL,PRIMARY KEY(output_id,field));
 CREATE TABLE IF NOT EXISTS issue(id INTEGER PRIMARY KEY,envelope_id INT REFERENCES envelope(id),run_id INT REFERENCES run(id),code TEXT NOT NULL,detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS consumer_policy(id INTEGER PRIMARY KEY,consumer TEXT NOT NULL UNIQUE,contract_hash TEXT NOT NULL,amount_limit INTEGER NOT NULL CHECK(amount_limit>=0));
+CREATE TABLE IF NOT EXISTS allocation(id INTEGER PRIMARY KEY,consumer TEXT NOT NULL,contract_hash TEXT NOT NULL,output_id INT NOT NULL REFERENCES output(id),status TEXT NOT NULL,reason TEXT NOT NULL,UNIQUE(consumer,output_id));
+CREATE TABLE IF NOT EXISTS delivery(id INTEGER PRIMARY KEY,consumer TEXT NOT NULL,contract_hash TEXT NOT NULL,status TEXT NOT NULL,created TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(consumer,contract_hash));
+CREATE TABLE IF NOT EXISTS delivery_item(delivery_id INT REFERENCES delivery(id),output_id INT REFERENCES output(id),hash TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(delivery_id,output_id));
+CREATE TABLE IF NOT EXISTS delivery_ack(id INTEGER PRIMARY KEY,delivery_id INT REFERENCES delivery(id),output_id INT REFERENCES output(id),hash TEXT NOT NULL,result TEXT NOT NULL,UNIQUE(delivery_id,output_id));
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True);db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);return db

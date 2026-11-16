@@ -1,10 +1,10 @@
 import argparse,json,tempfile
 from pathlib import Path
-from . import engine
+from . import engine,operations
 def demo():
     root=Path(tempfile.mkdtemp(prefix='contractbridge-'));db=root/'ledger.db'
     contract={'versions':[{'version':'v1','signature':['/legacy']},{'version':'v2','signature':['/new']}],'required':['id','amount'], 'rules':[{'target':'id','source':'/entity_id'},{'target':'amount','source':'/legacy/value','op':'scale','factor':100}], 'errors':{'TEMP':'retry','FATAL':'failed'}}
-    h=engine.freeze(db,contract);p=root/'input.jsonl';p.write_text(json.dumps({'version':'v1','entity_id':'A-1','subject':'Example','legacy':{'value':2},'status':'ok'}));engine.ingest(db,p,contract);engine.translate(db,h);print(engine.report(db,h,root/'report.json'))
+    h=engine.freeze(db,contract);p=root/'input.jsonl';p.write_text(json.dumps({'version':'v1','entity_id':'A-1','subject':'Example','legacy':{'value':2},'status':'ok'}));engine.ingest(db,p,contract);engine.translate(db,h);operations.policy(db,'demo-consumer',h,500);print(operations.allocate(db,'demo-consumer'));delivery=operations.dispatch(db,'demo-consumer');print(operations.acknowledge(db,delivery['id'],delivery['items'][0]['output_id'],delivery['items'][0]['hash'],'接收'));print(engine.report(db,h,root/'report.json'))
 def main():
     p=argparse.ArgumentParser();sub=p.add_subparsers(dest='cmd',required=True);sub.add_parser('demo')
     s=sub.add_parser('freeze');s.add_argument('--db',required=True);s.add_argument('contract')
@@ -14,6 +14,11 @@ def main():
     for n in ('translate','reconcile','verify','report'):
         s=sub.add_parser(n);s.add_argument('--db',required=True);s.add_argument('--contract-hash',required=True)
         if n=='report':s.add_argument('--out',required=True)
+    s=sub.add_parser('consumer-policy');s.add_argument('--db',required=True);s.add_argument('--consumer',required=True);s.add_argument('--contract-hash',required=True);s.add_argument('--limit',required=True,type=int)
+    for n in ('allocate','dispatch'):
+        s=sub.add_parser(n);s.add_argument('--db',required=True);s.add_argument('--consumer',required=True)
+    s=sub.add_parser('acknowledge');s.add_argument('--db',required=True);s.add_argument('--delivery-id',required=True,type=int);s.add_argument('--output-id',required=True,type=int);s.add_argument('--hash',required=True);s.add_argument('--result',required=True,choices=['接收','失败'])
+    s=sub.add_parser('delivery-status');s.add_argument('--db',required=True);s.add_argument('--delivery-id',required=True,type=int)
     x=p.parse_args()
     if x.cmd=='demo':demo()
     elif x.cmd=='freeze':print(engine.freeze(x.db,json.loads(Path(x.contract).read_text())))
@@ -24,5 +29,10 @@ def main():
     elif x.cmd=='translate':print(engine.translate(x.db,x.contract_hash))
     elif x.cmd=='reconcile':print(engine.reconcile(x.db))
     elif x.cmd=='verify':print(engine.verify(x.db,x.contract_hash))
+    elif x.cmd=='consumer-policy':print(operations.policy(x.db,x.consumer,x.contract_hash,x.limit))
+    elif x.cmd=='allocate':print(operations.allocate(x.db,x.consumer))
+    elif x.cmd=='dispatch':print(operations.dispatch(x.db,x.consumer))
+    elif x.cmd=='acknowledge':print(operations.acknowledge(x.db,x.delivery_id,x.output_id,x.hash,x.result))
+    elif x.cmd=='delivery-status':print(operations.delivery_status(x.db,x.delivery_id))
     else:print(engine.report(x.db,x.contract_hash,x.out))
 if __name__=='__main__':main()

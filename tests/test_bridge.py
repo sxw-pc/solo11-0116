@@ -81,3 +81,15 @@ def test_composite_legacy_identity(tmp_path):
     conn=connect(db)
     assert conn.execute('SELECT entity_id FROM envelope').fetchone()[0]=='S|7'
     assert json.loads(conn.execute('SELECT body FROM output').fetchone()[0])['id']=='S|7'
+
+def test_null_is_distinct_from_missing_default():
+    c=cfg();c['rules'].append({'target':'note','source':'/legacy/note','default':'N/A'})
+    out,_,issues=engine.transform({'entity_id':'A','legacy':{'value':1}},c)
+    assert out['note']=='N/A' and not issues
+    out,_,issues=engine.transform({'entity_id':'A','legacy':{'value':1,'note':None}},c)
+    assert ('null_forbidden','note') in issues
+
+def test_unknown_enum_stays_unresolved():
+    c=cfg();c['rules'].append({'target':'level','source':'/legacy/level','op':'enum','values':{'1':'low'}})
+    out,_,issues=engine.transform({'entity_id':'A','legacy':{'value':1,'level':99}},c)
+    assert 'level' not in out and ('enum_unknown','level') in issues

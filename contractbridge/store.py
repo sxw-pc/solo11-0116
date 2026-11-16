@@ -3,6 +3,7 @@ from pathlib import Path
 SCHEMA="""
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS contract(id INTEGER PRIMARY KEY,version TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,body TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS contract_version_unique ON contract(version);
 CREATE TABLE IF NOT EXISTS source(id INTEGER PRIMARY KEY,hash TEXT NOT NULL UNIQUE,body BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS envelope(id INTEGER PRIMARY KEY,source_id INT REFERENCES source(id),line_no INT,version TEXT,status TEXT,raw TEXT,entity_id TEXT,UNIQUE(source_id,line_no));
 CREATE TABLE IF NOT EXISTS entity(id TEXT PRIMARY KEY,subject TEXT NOT NULL);

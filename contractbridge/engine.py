@@ -37,6 +37,8 @@ def freeze(db_path,contract):
     targets={rule['target'] for rule in contract['rules']}
     required=set(contract['required'])
     if not required.issubset(targets):raise ValueError('required_unmapped')
+    from . import transactions
+    transactions.validate_transaction_contract(contract)
     body=canonical(contract);h=sha(body.encode());db=connect(db_path)
     target_version=contract['versions'][-1]['version']
     with db:
@@ -66,13 +68,31 @@ def ingest(db_path,path,contract):
     raw=Path(path).read_bytes();db=connect(db_path);count=0
     with db:
         old=db.execute('SELECT id FROM source WHERE hash=?',(sha(raw),)).fetchone()
-        if old:return 0
+        if old:
+            # The bytes are already frozen, but another contract may recognize
+            # the same envelope rows through its own signatures. Recognition is
+            # recorded per (envelope, contract); the envelope's primary version
+            # column is never rewritten.
+            sid=old['id'];contract_row=db.execute('SELECT id FROM contract WHERE hash=?',(sha(canonical(contract).encode()),)).fetchone()
+            contract_pk=contract_row['id'] if contract_row else None
+            for e in db.execute('SELECT * FROM envelope WHERE source_id=? ORDER BY line_no',(sid,)):
+                obj=json.loads(e['raw']);version=identify(obj,contract)
+                if version and contract_pk:
+                    db.execute('INSERT OR IGNORE INTO envelope_version(envelope_id,contract_id,version) VALUES (?,?,?)',(e['id'],contract_pk,version))
+                    if not e['version']:
+                        db.execute('UPDATE envelope SET version=?,status=? WHERE id=?',(version,'已识别版本',e['id']))
+                        db.execute("DELETE FROM issue WHERE envelope_id=? AND code='version_ambiguous'",(e['id'],))
+            return 0
         sid=db.execute('INSERT INTO source(hash,body) VALUES (?,?)',(sha(raw),raw)).lastrowid
+        contract_row=db.execute('SELECT id FROM contract WHERE hash=?',(sha(canonical(contract).encode()),)).fetchone()
+        contract_pk=contract_row['id'] if contract_row else None
         for line_no,line in enumerate(raw.decode().splitlines(),1):
             try:
                 obj=json.loads(line);version=identify(obj,contract)
                 status='已识别版本' if version else '待核'
                 eid=db.execute('INSERT INTO envelope(source_id,line_no,version,status,raw,entity_id) VALUES (?,?,?,?,?,?)',(sid,line_no,version,status,line,normalize_identity(obj,contract))).lastrowid
+                if version and contract_pk:
+                    db.execute('INSERT OR IGNORE INTO envelope_version(envelope_id,contract_id,version) VALUES (?,?,?)',(eid,contract_pk,version))
                 if not version:db.execute('INSERT INTO issue(envelope_id,code,detail) VALUES (?,?,?)',(eid,'version_ambiguous',line))
                 count+=1
             except (ValueError,json.JSONDecodeError) as exc:
@@ -112,16 +132,35 @@ def translate(db_path,contract_hash):
     if not row:raise ValueError('unknown_contract')
     contract=json.loads(row['body']);outputs=[]
     with db:
+        contract_versions={x['version'] for x in contract['versions']}
+        recognized={r['envelope_id']:r['version'] for r in db.execute(
+            'SELECT envelope_id,version FROM envelope_version WHERE contract_id=?',(row['id'],))}
         for src in db.execute('SELECT * FROM source'):
             existing=db.execute('SELECT id FROM run WHERE source_id=? AND contract_id=?',(src['id'],row['id'])).fetchone()
             if existing:
-                outputs.extend(x['id'] for x in db.execute('SELECT id FROM output WHERE run_id=?',(existing['id'],)))
-                continue
-            rid=db.execute("INSERT INTO run(source_id,contract_id,status) VALUES (?,?,'待解析')",(src['id'],row['id'])).lastrowid
-            envelopes=[dict(x) for x in db.execute('SELECT * FROM envelope WHERE source_id=? ORDER BY line_no',(src['id'],))]
+                rid=existing['id']
+                done={r['envelope_id'] for r in db.execute('SELECT envelope_id FROM output WHERE run_id=?',(rid,))}
+                # Envelopes that failed translation produced issues instead of
+                # outputs; they were processed too and must not be replayed.
+                done |= {r['envelope_id'] for r in db.execute(
+                    'SELECT DISTINCT envelope_id FROM issue WHERE run_id=? AND envelope_id IS NOT NULL',(rid,))}
+                pending=[e for e in db.execute('SELECT * FROM envelope WHERE source_id=? ORDER BY line_no',(src['id'],))
+                         if e['id'] not in done and e['id'] in recognized]
+                if not pending:
+                    outputs.extend(x['id'] for x in db.execute('SELECT id FROM output WHERE run_id=?',(rid,)))
+                    continue
+            else:
+                rid=db.execute("INSERT INTO run(source_id,contract_id,status) VALUES (?,?,'待解析')",(src['id'],row['id'])).lastrowid
+                pending=[dict(x) for x in db.execute('SELECT * FROM envelope WHERE source_id=? ORDER BY line_no',(src['id'],))]
+            # Recognition is per (envelope, contract): the same raw envelope can
+            # belong to two frozen contracts via their distinct signatures.
+            envelopes=pending
             seen={};states={};bad=False
             for e in envelopes:
-                if not e['version']:bad=True;continue
+                scoped_version=recognized.get(e['id'], e['version'] if e['version'] in contract_versions else None)
+                if not scoped_version:
+                    if not e['version']:bad=True
+                    continue
                 obj=json.loads(e['raw']);obj['entity_id']=e['entity_id'];subject=str(obj.get('subject',''));identity=e['entity_id']
                 if not identity or not subject:db.execute('INSERT INTO issue(envelope_id,run_id,code,detail) VALUES (?,?,?,?)',(e['id'],rid,'identity_missing',identity));bad=True;continue
                 if identity in seen and seen[identity]!=subject:
@@ -143,9 +182,16 @@ def translate(db_path,contract_hash):
                 state='待核' if issues else '已核验';body=canonical(output)
                 oid=db.execute('INSERT INTO output(run_id,envelope_id,body,hash,status) VALUES (?,?,?,?,?)',(rid,e['id'],body,sha(body.encode()),state)).lastrowid
                 for field,pointer_path,rule in evidence:db.execute('INSERT INTO evidence VALUES (?,?,?,?)',(oid,field,pointer_path,rule))
-                bad |= bool(issues);outputs.append(oid)
-            db.execute('UPDATE run SET status=? WHERE id=?',('待核' if bad else '已核验',rid))
-    db.close();reconcile(db_path);return outputs
+                bad |= bool(issues)
+            run_bad=bad or bool(db.execute(
+                "SELECT 1 FROM output WHERE run_id=? AND status='待核' LIMIT 1",(rid,)).fetchone())
+            db.execute('UPDATE run SET status=? WHERE id=?',('待核' if run_bad else '已核验',rid))
+            outputs.extend(x['id'] for x in db.execute('SELECT id FROM output WHERE run_id=?',(rid,)))
+    db.close();reconcile(db_path)
+    if contract.get('transaction'):
+        from . import transactions
+        transactions.reconcile_transactions(db_path,contract_hash)
+    return outputs
 def reconcile(db_path):
     db=connect(db_path);groups={};issues=[]
     with db:
@@ -193,4 +239,31 @@ def report(db_path,contract_hash,path):
     db=connect(db_path);obj={'verify':verify(db_path,contract_hash),'outputs':[],'issues':[dict(x) for x in db.execute('SELECT code,detail,envelope_id,run_id FROM issue')]}
     for o in db.execute('SELECT o.*,s.hash AS source_hash,e.line_no FROM output o JOIN envelope e ON e.id=o.envelope_id JOIN source s ON s.id=e.source_id'):
         x=dict(o);x['evidence']=[dict(e) for e in db.execute('SELECT field,pointer,rule FROM evidence WHERE output_id=?',(o['id'],))];obj['outputs'].append(x)
-    path=Path(path);path.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding='utf-8');path.with_suffix('.md').write_text('# 契约转译报告\n\n'+f"输出 {len(obj['outputs'])} 条，问题 {len(obj['issues'])} 条。\n",encoding='utf-8');db.close();return path
+    contract_row=db.execute('SELECT id,body FROM contract WHERE hash=?',(contract_hash,)).fetchone()
+    if contract_row and json.loads(contract_row['body']).get('transaction'):
+        obj['transactions']=[]
+        for tr in db.execute('SELECT * FROM transaction_record WHERE contract_id=? ORDER BY transaction_id',(contract_row['id'],)):
+            item=dict(tr);item['events']=[dict(e) for e in db.execute('''SELECT te.*,s.hash AS source_hash
+                FROM transaction_event te JOIN envelope en ON en.id=te.envelope_id
+                JOIN source s ON s.id=en.source_id WHERE te.transaction_pk=? ORDER BY te.ordinal''',(tr['id'],))]
+            item['gaps']=[dict(g) for g in db.execute('SELECT output_id,code,detail FROM transaction_gap WHERE transaction_pk=? ORDER BY id',(tr['id'],))]
+            obj['transactions'].append(item)
+        obj['unattached_gaps']=[dict(g) for g in db.execute(
+            'SELECT output_id,code,detail FROM transaction_gap WHERE transaction_pk IS NULL ORDER BY id')]
+    path=Path(path);path.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding='utf-8')
+    md='# 契约转译报告\n\n'+f"输出 {len(obj['outputs'])} 条，问题 {len(obj['issues'])} 条。\n"
+    if 'transactions' in obj:
+        md+=f"\n## 跨接口交易核对\n\n交易 {len(obj['transactions'])} 笔，游离证据 {len(obj['unattached_gaps'])} 条。\n"
+        for tr in obj['transactions']:
+            md+=(f"\n### 交易 {tr['transaction_id']}（{tr['protocol']} → {tr['status']}）\n\n"
+                 f"授权 {tr['authorized']} / 扣款 {tr['captured']} / 退款 {tr['refunded']} / "
+                 f"撤销 {tr['voided']} / 可退余额 {tr['refundable']}\n\n事件链：\n\n")
+            for e in tr['events']:
+                md+=(f"{e['ordinal']}. {e['event_time']} {e['event']} {e['amount']} "
+                     f"(output {e['output_id']}, envelope {e['envelope_id']}, source {e['source_hash'][:12]}, "
+                     f"key {e['event_key']}, replay×{e['replay_count']})\n")
+            if tr['gaps']:
+                md+='\n缺口：\n\n'+'\n'.join(f"- {g['code']}: {g['detail']}" for g in tr['gaps'])+'\n'
+        if obj['unattached_gaps']:
+            md+='\n游离缺口：\n\n'+'\n'.join(f"- {g['code']}: {g['detail']}" for g in obj['unattached_gaps'])+'\n'
+    path.with_suffix('.md').write_text(md,encoding='utf-8');db.close();return path

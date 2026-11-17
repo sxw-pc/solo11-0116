@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS contract(id INTEGER PRIMARY KEY,version TEXT NOT NULL
 CREATE UNIQUE INDEX IF NOT EXISTS contract_version_unique ON contract(version);
 CREATE TABLE IF NOT EXISTS source(id INTEGER PRIMARY KEY,hash TEXT NOT NULL UNIQUE,body BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS envelope(id INTEGER PRIMARY KEY,source_id INT REFERENCES source(id),line_no INT,version TEXT,status TEXT,raw TEXT,entity_id TEXT,UNIQUE(source_id,line_no));
+CREATE TABLE IF NOT EXISTS envelope_version(envelope_id INT NOT NULL REFERENCES envelope(id),contract_id INT NOT NULL REFERENCES contract(id),version TEXT NOT NULL,PRIMARY KEY(envelope_id,contract_id));
 CREATE TABLE IF NOT EXISTS entity(id TEXT PRIMARY KEY,subject TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS run(id INTEGER PRIMARY KEY,source_id INT REFERENCES source(id),contract_id INT REFERENCES contract(id),status TEXT NOT NULL,created TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(source_id,contract_id));
 CREATE TABLE IF NOT EXISTS output(id INTEGER PRIMARY KEY,run_id INT REFERENCES run(id),envelope_id INT REFERENCES envelope(id),body TEXT NOT NULL,hash TEXT NOT NULL,status TEXT NOT NULL);
@@ -18,6 +19,9 @@ CREATE TABLE IF NOT EXISTS delivery_item(delivery_id INT REFERENCES delivery(id)
 CREATE TABLE IF NOT EXISTS delivery_ack(id INTEGER PRIMARY KEY,delivery_id INT REFERENCES delivery(id),output_id INT REFERENCES output(id),hash TEXT NOT NULL,result TEXT NOT NULL,UNIQUE(delivery_id,output_id));
 CREATE TABLE IF NOT EXISTS migration_plan(id TEXT PRIMARY KEY,baseline_hash TEXT NOT NULL REFERENCES contract(hash),target_hash TEXT NOT NULL REFERENCES contract(hash),max_amount_delta REAL NOT NULL,status TEXT NOT NULL,reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS migration_diff(plan_id TEXT NOT NULL REFERENCES migration_plan(id),envelope_id INT NOT NULL REFERENCES envelope(id),baseline_output INT REFERENCES output(id),target_output INT REFERENCES output(id),amount_delta REAL,status TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(plan_id,envelope_id));
+CREATE TABLE IF NOT EXISTS transaction_record(id INTEGER PRIMARY KEY,contract_id INT NOT NULL REFERENCES contract(id),transaction_id TEXT NOT NULL,protocol TEXT NOT NULL,status TEXT NOT NULL,order_amount REAL NOT NULL DEFAULT 0,authorized REAL NOT NULL DEFAULT 0,captured REAL NOT NULL DEFAULT 0,refunded REAL NOT NULL DEFAULT 0,voided REAL NOT NULL DEFAULT 0,refundable REAL NOT NULL DEFAULT 0,UNIQUE(contract_id,transaction_id));
+CREATE TABLE IF NOT EXISTS transaction_event(id INTEGER PRIMARY KEY,transaction_pk INT NOT NULL REFERENCES transaction_record(id),output_id INT NOT NULL REFERENCES output(id),envelope_id INT NOT NULL REFERENCES envelope(id),event TEXT NOT NULL,amount REAL,event_time TEXT,event_key TEXT,credential TEXT,ordinal INT NOT NULL,replay_count INT NOT NULL DEFAULT 1,UNIQUE(transaction_pk,event_key));
+CREATE TABLE IF NOT EXISTS transaction_gap(id INTEGER PRIMARY KEY,transaction_pk INT REFERENCES transaction_record(id),output_id INT REFERENCES output(id),code TEXT NOT NULL,detail TEXT NOT NULL);
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True);db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);return db

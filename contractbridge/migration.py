@@ -68,6 +68,16 @@ def compare(path, plan_id):
             status, reason = '阻断', 'semantic_drift'
         else:
             status, reason = '可切换', 'cohort_compatible'
+        # A target output can pass every per-envelope id/status/amount check yet
+        # fail cross-interface transaction conservation. Such a cohort is never
+        # switchable: surface-legal JSON must not merge into a success cutover.
+        from . import transactions
+        blocked = transactions.pending_outputs(path, plan_row['target_hash'])
+        blocked_diffs = [d for d in diffs if d['target_output'] in blocked]
+        if blocked_diffs and status != '阻断':
+            status, reason = '待核', 'transaction_unconserved'
+            for d in blocked_diffs:
+                d['status'], d['reason'] = '待核', 'transaction_unconserved'
         with db:
             db.execute('DELETE FROM migration_diff WHERE plan_id=?', (plan_id,))
             for d in diffs:

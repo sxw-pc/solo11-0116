@@ -10,6 +10,8 @@
 
 同一契约版本号对应的规则正文不可更改；语义变更必须分配新版本，旧版本保持可复核。
 
+`freshness-policy` 冻结输出时效阈值，`freshness-record` 以独立 ID 记录 source、received、published 时间点，`freshness-report` 给出当前简单的逐输出历时判断；事件可带 supersedes 引用，但当前报表未解释修订或迟到事件。
+
 ## 消费者配额与交付回执
 
 `consumer-policy` 冻结消费者额度，`allocate` 根据逐条验真、主体去重及累计金额形成配额决定。`dispatch` 只对整批已配额输出生成交付快照；`acknowledge` 逐条记录接收或失败，重复回执幂等，冲突回执拒绝。转译已核验但额度超限时暂缓交付；部分接收失败形成可查询的部分失败状态。

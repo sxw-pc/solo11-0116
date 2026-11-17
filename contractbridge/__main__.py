@@ -25,6 +25,9 @@ def main():
     s=sub.add_parser('delivery-status');s.add_argument('--db',required=True);s.add_argument('--delivery-id',required=True,type=int)
     s=sub.add_parser('migration-plan');s.add_argument('--db',required=True);s.add_argument('--id',required=True);s.add_argument('--baseline-hash',required=True);s.add_argument('--target-hash',required=True);s.add_argument('--max-amount-delta',required=True,type=float)
     s=sub.add_parser('migration-compare');s.add_argument('--db',required=True);s.add_argument('--id',required=True)
+    s=sub.add_parser('freshness-policy');s.add_argument('--db',required=True);s.add_argument('--id',required=True);s.add_argument('--contract-hash',required=True);s.add_argument('--sla-seconds',required=True,type=int)
+    s=sub.add_parser('freshness-record');s.add_argument('--db',required=True);s.add_argument('--id',required=True);s.add_argument('--policy-id',required=True);s.add_argument('--output-id',required=True,type=int);s.add_argument('--stage',required=True);s.add_argument('--occurred-at',required=True);s.add_argument('--observed-at',required=True);s.add_argument('--supersedes')
+    s=sub.add_parser('freshness-report');s.add_argument('--db',required=True);s.add_argument('--policy-id',required=True)
     x=p.parse_args()
     if x.cmd=='demo':demo()
     elif x.cmd=='freeze':print(engine.freeze(x.db,json.loads(Path(x.contract).read_text())))
@@ -42,5 +45,14 @@ def main():
     elif x.cmd=='delivery-status':print(operations.delivery_status(x.db,x.delivery_id))
     elif x.cmd=='migration-plan':migration.plan(x.db,x.id,x.baseline_hash,x.target_hash,x.max_amount_delta)
     elif x.cmd=='migration-compare':print(migration.compare(x.db,x.id))
+    elif x.cmd=='freshness-policy':
+        from .freshness import policy
+        print(policy(x.db,x.id,x.contract_hash,x.sla_seconds))
+    elif x.cmd=='freshness-record':
+        from .freshness import record
+        print(record(x.db,x.id,x.policy_id,x.output_id,x.stage,x.occurred_at,x.observed_at,x.supersedes))
+    elif x.cmd=='freshness-report':
+        from .freshness import report
+        print(report(x.db,x.policy_id))
     else:print(engine.report(x.db,x.contract_hash,x.out))
 if __name__=='__main__':main()

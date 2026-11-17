@@ -1,0 +1,10 @@
+{
+  "id": "migration-canary-demo",
+  "plan_id": "cutover",
+  "design": {
+    "strata": [
+      {"label": "low-amount", "frame_ids": [1, 2], "selected_ids": [1]},
+      {"label": "high-amount", "frame_ids": [3, 4], "selected_ids": [3]}
+    ]
+  }
+}

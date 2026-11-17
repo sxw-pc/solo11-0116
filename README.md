@@ -1,5 +1,7 @@
 # 契约转译台
 
+增强素材副本新增迁移抽样批次登记：在 `migration-plan` 建立旧版/目标版对照计划后，`python -m contractbridge canary-register --db <DB> --fixture fixtures/migration-canary.json` 冻结两层样本框及选中封套，`canary-inspect --db <DB> --id migration-canary-demo` 可读回。`tests/test_canary.py` 用四条本地合成封套跑通此流程。当前登记只固定样本设计，不推断全量迁移风险；原有逐封套比较及交付门禁保持原样。
+
 旧版 JSON 接口封套转新业务消费者契约。保留版本、字段级来源、身份冲突、缺失语义、错误映射和跨包状态证据。
 
 运行：`python -m pip install . --no-deps --no-build-isolation`，`python -m contractbridge demo`，`python -m contractbridge --help`，`python -m pytest -q`。运行与测试使用本地合成数据，不访问网络。

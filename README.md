@@ -1,5 +1,7 @@
 # 契约转译台
 
+增强素材流程：`feed-declare` 冻结本地 JSONL 供应方交接声明（文件名、字节数、封套数与 SHA-256），`feed-describe` 可复核声明。合成样例见 `fixtures/supplier-feed*`，回归见 `tests/test_feed.py`。声明目前不改变原有导入、转译与交付结果。
+
 旧版 JSON 接口封套转新业务消费者契约。保留版本、字段级来源、身份冲突、缺失语义、错误映射和跨包状态证据。
 
 运行：`python -m pip install . --no-deps --no-build-isolation`，`python -m contractbridge demo`，`python -m contractbridge --help`，`python -m pytest -q`。运行与测试使用本地合成数据，不访问网络。

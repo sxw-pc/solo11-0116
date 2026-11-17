@@ -25,6 +25,8 @@ def main():
     s=sub.add_parser('delivery-status');s.add_argument('--db',required=True);s.add_argument('--delivery-id',required=True,type=int)
     s=sub.add_parser('migration-plan');s.add_argument('--db',required=True);s.add_argument('--id',required=True);s.add_argument('--baseline-hash',required=True);s.add_argument('--target-hash',required=True);s.add_argument('--max-amount-delta',required=True,type=float)
     s=sub.add_parser('migration-compare');s.add_argument('--db',required=True);s.add_argument('--id',required=True)
+    s=sub.add_parser('repair-open');s.add_argument('--db',required=True);s.add_argument('case')
+    s=sub.add_parser('repair-describe');s.add_argument('--db',required=True);s.add_argument('--id',required=True)
     x=p.parse_args()
     if x.cmd=='demo':demo()
     elif x.cmd=='freeze':print(engine.freeze(x.db,json.loads(Path(x.contract).read_text())))
@@ -42,5 +44,11 @@ def main():
     elif x.cmd=='delivery-status':print(operations.delivery_status(x.db,x.delivery_id))
     elif x.cmd=='migration-plan':migration.plan(x.db,x.id,x.baseline_hash,x.target_hash,x.max_amount_delta)
     elif x.cmd=='migration-compare':print(migration.compare(x.db,x.id))
+    elif x.cmd=='repair-open':
+        from .repair import open_case
+        print(open_case(x.db,json.loads(Path(x.case).read_text(encoding='utf-8'))))
+    elif x.cmd=='repair-describe':
+        from .repair import describe
+        print(describe(x.db,x.id))
     else:print(engine.report(x.db,x.contract_hash,x.out))
 if __name__=='__main__':main()

@@ -12,7 +12,8 @@ def demo():
 def main():
     p=argparse.ArgumentParser();sub=p.add_subparsers(dest='cmd',required=True);sub.add_parser('demo')
     s=sub.add_parser('freeze');s.add_argument('--db',required=True);s.add_argument('contract')
-    s=sub.add_parser('ingest');s.add_argument('--db',required=True);s.add_argument('contract');s.add_argument('source')
+    s=sub.add_parser('ingest');s.add_argument('--db',required=True);s.add_argument('--collected-at');s.add_argument('contract');s.add_argument('source')
+    s=sub.add_parser('bridge-declare');s.add_argument('--db',required=True);s.add_argument('declaration')
     for n in ('normalize','errors'):
         s=sub.add_parser(n);s.add_argument('contract');s.add_argument('envelope')
     for n in ('translate','reconcile','verify','report'):
@@ -28,7 +29,8 @@ def main():
     x=p.parse_args()
     if x.cmd=='demo':demo()
     elif x.cmd=='freeze':print(engine.freeze(x.db,json.loads(Path(x.contract).read_text())))
-    elif x.cmd=='ingest':print(engine.ingest(x.db,x.source,json.loads(Path(x.contract).read_text())))
+    elif x.cmd=='ingest':print(engine.ingest(x.db,x.source,json.loads(Path(x.contract).read_text()),collected_at=x.collected_at))
+    elif x.cmd=='bridge-declare':print(engine.declare_bridge(x.db,json.loads(Path(x.declaration).read_text())))
     elif x.cmd in ('normalize','errors'):
         c=json.loads(Path(x.contract).read_text());obj=json.loads(Path(x.envelope).read_text());out,evidence,issues=engine.transform(obj,c)
         print(json.dumps({'entity_id':obj.get('entity_id'),'subject':obj.get('subject'),'status':out.get('status'),'evidence':evidence,'issues':issues},ensure_ascii=False))

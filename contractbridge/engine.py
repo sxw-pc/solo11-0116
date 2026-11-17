@@ -2,6 +2,7 @@ import hashlib,json
 from datetime import datetime,timezone
 from pathlib import Path
 from .store import connect
+from . import permissions
 def sha(x):return hashlib.sha256(x).hexdigest()
 def event_instant(value):
     parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
@@ -33,7 +34,7 @@ def pointer(obj,path):
 def freeze(db_path,contract):
     versions={x['version'] for x in contract['versions']}
     if len(versions)!=2 or len(contract['versions'])!=2:raise ValueError('two_versions_required')
-    ordered_rules(contract)
+    ordered_rules(contract);permissions.validate_contract(contract)
     targets={rule['target'] for rule in contract['rules']}
     required=set(contract['required'])
     if not required.issubset(targets):raise ValueError('required_unmapped')
@@ -191,6 +192,20 @@ def verify(db_path,contract_hash):
     db.close();return results
 def report(db_path,contract_hash,path):
     db=connect(db_path);obj={'verify':verify(db_path,contract_hash),'outputs':[],'issues':[dict(x) for x in db.execute('SELECT code,detail,envelope_id,run_id FROM issue')]}
+    contract=json.loads(db.execute('SELECT body FROM contract WHERE hash=?',(contract_hash,)).fetchone()['body'])
+    reg=permissions.regime(contract);obj['permission_regime']=reg;obj['deliveries']=[]
     for o in db.execute('SELECT o.*,s.hash AS source_hash,e.line_no FROM output o JOIN envelope e ON e.id=o.envelope_id JOIN source s ON s.id=e.source_id'):
-        x=dict(o);x['evidence']=[dict(e) for e in db.execute('SELECT field,pointer,rule FROM evidence WHERE output_id=?',(o['id'],))];obj['outputs'].append(x)
-    path=Path(path);path.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding='utf-8');path.with_suffix('.md').write_text('# 契约转译报告\n\n'+f"输出 {len(obj['outputs'])} 条，问题 {len(obj['issues'])} 条。\n",encoding='utf-8');db.close();return path
+        x=dict(o);x['evidence']=[dict(e) for e in db.execute('SELECT field,pointer,rule FROM evidence WHERE output_id=?',(o['id'],))]
+        if reg:
+            x['field_permissions']={f:[list(a) for a in sorted(atoms)] for f,atoms in permissions.field_atoms(contract,[(e['field'],e['pointer'],e['rule']) for e in x['evidence']]).items()}
+            del x['body']
+        obj['outputs'].append(x)
+    for d in db.execute('SELECT * FROM delivery WHERE contract_hash=? ORDER BY id',(contract_hash,)):
+        entry=dict(d);entry['items']=[]
+        for it in db.execute('SELECT output_id,hash,status,redacted FROM delivery_item WHERE delivery_id=? ORDER BY output_id',(d['id'],)):
+            item=dict(it);item['redacted']=json.loads(it['redacted']);entry['items'].append(item)
+        entry['allocations']=[]
+        for a in db.execute('SELECT output_id,status,reason,permission,redacted FROM allocation WHERE consumer=? AND contract_hash=? ORDER BY output_id',(d['consumer'],contract_hash)):
+            alloc=dict(a);alloc['redacted']=json.loads(a['redacted']);entry['allocations'].append(alloc)
+        obj['deliveries'].append(entry)
+    path=Path(path);path.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding='utf-8');path.with_suffix('.md').write_text('# 契约转译报告\n\n'+f"输出 {len(obj['outputs'])} 条，问题 {len(obj['issues'])} 条，交付 {len(obj['deliveries'])} 条。\n",encoding='utf-8');db.close();return path

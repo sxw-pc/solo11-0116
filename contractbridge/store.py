@@ -21,3 +21,10 @@ CREATE TABLE IF NOT EXISTS migration_diff(plan_id TEXT NOT NULL REFERENCES migra
 """
 def connect(path):
     p=Path(path);p.parent.mkdir(parents=True,exist_ok=True);db=sqlite3.connect(p);db.row_factory=sqlite3.Row;db.executescript(SCHEMA);return db
+def snapshot(path):
+    """Open one consistent read snapshot: every read shares a single transaction.
+
+    Audit issuance reads the whole request scope from one database state.
+    TEMP tables stay available as bounded-memory replay scratch space."""
+    p=Path(path);db=sqlite3.connect(p,isolation_level=None);db.row_factory=sqlite3.Row
+    db.execute('BEGIN');return db
